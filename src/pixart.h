@@ -38,6 +38,16 @@ struct pixart_data {
     int64_t last_scroll_time;
 #endif
 
+#ifdef CONFIG_PMW3610_INERTIA_SCROLL
+    bool inertia_active;
+    int32_t inertia_velocity_x;
+    int32_t inertia_velocity_y;
+    int64_t inertia_start_time;
+    struct k_work_delayable inertia_work;
+    int32_t last_vel_x;
+    int32_t last_vel_y;
+#endif
+
     // motion interrupt isr
     struct gpio_callback irq_gpio_cb;
     // the work structure holding the trigger job

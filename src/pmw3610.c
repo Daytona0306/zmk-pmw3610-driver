@@ -70,6 +70,10 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
     [ASYNC_INIT_STEP_CONFIGURE] = pmw3610_async_init_configure,
 };
 
+#ifdef CONFIG_PMW3610_INERTIA_SCROLL
+static void pmw3610_inertia_work_handler(struct k_work *work);
+#endif
+
 //////// Function definitions //////////
 
 // checked and keep
@@ -642,6 +646,19 @@ static inline void process_scroll_events(const struct device *dev, struct pixart
             *target_delta = delta % CONFIG_PMW3610_SCROLL_TICK;
         }
         
+#ifdef CONFIG_PMW3610_INERTIA_SCROLL
+        // Store velocity for inertia scrolling
+        int32_t velocity = (delta * 10) / CONFIG_PMW3610_SCROLL_TICK; // Scale up for better precision
+        if (is_horizontal) {
+            data->last_vel_x = velocity;
+        } else {
+            data->last_vel_y = velocity;
+        }
+        
+        // Cancel any ongoing inertia scrolling when new scrolling begins
+        data->inertia_active = false;
+#endif
+        
         for (int i = 0; i < event_count; i++) {
             input_report_rel(dev,
                             is_horizontal ? INPUT_REL_HWHEEL : INPUT_REL_WHEEL,
@@ -658,8 +675,70 @@ static inline void process_scroll_events(const struct device *dev, struct pixart
             data->scroll_delta_x = 0;
         }
     }
+#ifdef CONFIG_PMW3610_INERTIA_SCROLL
+    else if (delta == 0 && !data->inertia_active && 
+             (abs(data->last_vel_x) >= CONFIG_PMW3610_INERTIA_MIN_VELOCITY || 
+              abs(data->last_vel_y) >= CONFIG_PMW3610_INERTIA_MIN_VELOCITY)) {
+        // Start inertia scrolling when trackball movement stops but we had velocity
+        data->inertia_active = true;
+        data->inertia_start_time = k_uptime_get();
+        data->inertia_velocity_x = data->last_vel_x;
+        data->inertia_velocity_y = data->last_vel_y;
+        
+        // Schedule the first inertia work
+        k_work_schedule(&data->inertia_work, K_MSEC(20));
+    }
+#endif
 }
 
+#ifdef CONFIG_PMW3610_INERTIA_SCROLL
+static void pmw3610_inertia_work_handler(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct pixart_data *data = CONTAINER_OF(dwork, struct pixart_data, inertia_work);
+    const struct device *dev = data->dev;
+    int64_t current_time = k_uptime_get();
+    int64_t elapsed = current_time - data->inertia_start_time;
+    
+    // Check if we should stop the inertia scrolling
+    if (!data->inertia_active || 
+        elapsed > CONFIG_PMW3610_INERTIA_MAX_DURATION_MS || 
+        (abs(data->inertia_velocity_x) < CONFIG_PMW3610_INERTIA_MIN_VELOCITY && 
+         abs(data->inertia_velocity_y) < CONFIG_PMW3610_INERTIA_MIN_VELOCITY)) {
+        
+        data->inertia_active = false;
+        data->inertia_velocity_x = 0;
+        data->inertia_velocity_y = 0;
+        return;
+    }
+    
+    // Apply decay to velocity (more decay as time passes)
+    float decay_factor = 1.0f - (CONFIG_PMW3610_INERTIA_DECAY_FACTOR / 10.0f) * 
+                         ((float)elapsed / CONFIG_PMW3610_INERTIA_MAX_DURATION_MS);
+    decay_factor = decay_factor < 0.1f ? 0.1f : decay_factor;
+    
+    data->inertia_velocity_x = (int32_t)(data->inertia_velocity_x * decay_factor);
+    data->inertia_velocity_y = (int32_t)(data->inertia_velocity_y * decay_factor);
+    
+    // Generate scroll events
+    int32_t delta_x = data->inertia_velocity_x / 4;  // Adjust divisor as needed
+    int32_t delta_y = data->inertia_velocity_y / 4;
+    
+    if (abs(delta_y) > 0) {
+        input_report_rel(dev, INPUT_REL_WHEEL, 
+                         delta_y > 0 ? PMW3610_SCROLL_Y_NEGATIVE : PMW3610_SCROLL_Y_POSITIVE,
+                         false, K_MSEC(10));
+    }
+    
+    if (abs(delta_x) > 0) {
+        input_report_rel(dev, INPUT_REL_HWHEEL, 
+                         delta_x > 0 ? PMW3610_SCROLL_X_NEGATIVE : PMW3610_SCROLL_X_POSITIVE,
+                         true, K_MSEC(10));
+    }
+    
+    // Schedule the next update (adjust interval as needed for smoothness)
+    k_work_schedule(&data->inertia_work, K_MSEC(20));
+}
+#endif
 
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
@@ -683,6 +762,10 @@ static int pmw3610_report_data(const struct device *dev) {
         if (input_mode_changed) {
             data->scroll_delta_x = 0;
             data->scroll_delta_y = 0;
+#ifdef CONFIG_PMW3610_INERTIA_SCROLL
+            // Cancel inertia scrolling when mode changes
+            data->inertia_active = false;
+#endif
         }
         dividor = 1; // this should be handled with the ticks rather than dividors
         break;
@@ -849,6 +932,20 @@ static int pmw3610_report_data(const struct device *dev) {
                 }
             }
         }
+#ifdef CONFIG_PMW3610_INERTIA_SCROLL
+    else if (input_mode == SCROLL && x == 0 && y == 0 && !data->inertia_active &&
+             (abs(data->last_vel_x) >= CONFIG_PMW3610_INERTIA_MIN_VELOCITY || 
+              abs(data->last_vel_y) >= CONFIG_PMW3610_INERTIA_MIN_VELOCITY)) {
+        // Start inertia scrolling when trackball movement stops
+        data->inertia_active = true;
+        data->inertia_start_time = k_uptime_get();
+        data->inertia_velocity_x = data->last_vel_x;
+        data->inertia_velocity_y = data->last_vel_y;
+        
+        // Schedule the first inertia work
+        k_work_schedule(&data->inertia_work, K_MSEC(20));
+    }
+#endif
     }
 
     return err;
@@ -921,6 +1018,12 @@ static int pmw3610_init(const struct device *dev) {
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
+
+    #ifdef CONFIG_PMW3610_INERTIA_SCROLL
+        // Init inertia scrolling work
+        k_work_init_delayable(&data->inertia_work, pmw3610_inertia_work_handler);
+        data->inertia_active = false;
+    #endif
 
     // check readiness of cs gpio pin and init it to inactive
     if (!device_is_ready(config->cs_gpio.port)) {

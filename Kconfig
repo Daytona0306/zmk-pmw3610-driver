@@ -187,6 +187,38 @@ config PMW3610_SCROLL_ACCELERATION_SENSITIVITY
     help
       Scrolling acceleration sensitivity. Higher values make scrolling more responsive with stronger acceleration.
 
+config PMW3610_INERTIA_SCROLL
+    bool "Enable inertia scrolling"
+    default y
+    help
+      Enable scrolling with inertia effect, where scrolling continues
+      with decreasing speed after the trackball movement stops.
+
+config PMW3610_INERTIA_DECAY_FACTOR
+    int "Inertia decay factor (1-10)"
+    default 5
+    range 1 10
+    depends on PMW3610_INERTIA_SCROLL
+    help
+      Controls how quickly the inertia scrolling slows down.
+      Lower values make scrolling stop more quickly.
+
+config PMW3610_INERTIA_MAX_DURATION_MS
+    int "Maximum inertia duration in milliseconds"
+    default 1000
+    depends on PMW3610_INERTIA_SCROLL
+    help
+      Maximum duration for inertia scrolling after trackball movement stops.
+
+config PMW3610_INERTIA_MIN_VELOCITY
+    int "Minimum velocity to trigger inertia scrolling"
+    default 5
+    range 1 20
+    depends on PMW3610_INERTIA_SCROLL
+    help
+      Minimum velocity required to trigger inertia scrolling.
+      Lower values make inertia scrolling trigger more easily.
+
 module = PMW3610
 module-str = PMW3610
 source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
