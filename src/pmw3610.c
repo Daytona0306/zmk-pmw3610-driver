@@ -665,7 +665,7 @@ static int pmw3610_report_data(const struct device *dev) {
 #ifdef CONFIG_PMW3610_ADJUSTABLE_MOUSESPEED
     // マウス移動モード (MOVE または SNIPE) の場合のみ、速度調整を適用する
     // input_mode が SCROLL ではない場合に処理を実行
-    if (input_mode != SCROLL) { // <-- この行を追加
+    if (input_mode == MOVE || input_mode == SNIPE) { // <-- この行に変更
         int16_t movement_size = abs(raw_x) + abs(raw_y);
 
         float speed_multiplier = 1.0; //速度の倍率
